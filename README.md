@@ -1,10 +1,7 @@
 # 🚀 Автоматический установщик Remnawave Node (Remnanode)
 
 <p align="center">
-  <img src="https://shields.io" alt="License: GPL-3.0">
-  <img src="https://shields.io" alt="Docker Compose">
-  <img src="https://shields.io" alt="OS Support">
-  <a href="https://t.me"><img src="https://shields.io" alt="Telegram Creator"></a>
+  <a href="https://t.me/IamLeonKennedy"><img src="https://shields.io" alt="Creator's Telegram"></a>
 </p>
 
 Удобный Bash-скрипт для быстрой и автоматической установки **Remnawave Node** (демона для панели управления VPN Remnawave) с поддержкой **классического TLS**, автоматическим выпуском SSL-сертификатов и оптимизацией сети.
