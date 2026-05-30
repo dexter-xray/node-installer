@@ -9,7 +9,7 @@
 
 Удобный Bash-скрипт для быстрой и автоматической установки **Remnawave Node** (демона для панели управления VPN Remnawave) с поддержкой **классического TLS**, автоматическим выпуском SSL-сертификатов и оптимизацией сети.
 
-> **Разработчик:** Dexter | Telegram: [@IamLeonKennedy](https://t.me)
+> **Разработчик:** Dexter | Telegram: [@IamLeonKennedy](https://t.me/IamLeonKennedy)
 
 ---
 
