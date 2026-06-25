@@ -1,7 +1,5 @@
 #!/bin/bash
 
-exec < /dev/tty
-
 clear
 echo "=================================================="
 echo " Скрипт сделан: Dexter | @IamLeonKennedy"
@@ -15,36 +13,39 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 while [ -z "$DOMAIN" ]; do
-  read -p "Введите ваш домен (например, example.com): " DOMAIN
+  echo -n "Введите ваш домен (например, example.com): "
+  read DOMAIN < /dev/tty
   if [ -z "$DOMAIN" ]; then
     echo "Домен не может быть пустым."
   fi
 done
 
 while [ -z "$EMAIL" ]; do
-  read -p "Введите ваш Email (для уведомлений Certbot): " EMAIL
+  echo -n "Введите ваш Email (для уведомлений Certbot): "
+  read EMAIL < /dev/tty
   if [ -z "$EMAIL" ]; then
     echo "Email не может быть пустым."
   fi
 done
 
 while [ -z "$SECRET_KEY" ]; do
-  read -p "Введите Secret Key из панели Remnawave: " SECRET_KEY
+  echo -n "Введите Secret Key из панели Remnawave: "
+  read SECRET_KEY < /dev/tty
   if [ -z "$SECRET_KEY" ]; then
     echo "Ключ не может быть пустым. Попробуйте еще раз."
   fi
 done
 
-read -p "На каком порту разместить ноду? [По умолчанию: 2222]: " NODE_PORT
+echo -n "На каком порту разместить ноду? [По умолчанию: 2222]: "
+read NODE_PORT < /dev/tty
 NODE_PORT=${NODE_PORT:-2222}
 
-read -p "На каком порту будет принимать подключения нода? [По умолчанию: 443]: " XRAY_PORT
+echo -n "На каком порту будет принимать подключения нода? [По умолчанию: 443]: "
+read XRAY_PORT < /dev/tty
 XRAY_PORT=${XRAY_PORT:-443}
 
-read -p "На каком порту будет принимать подключения нода? (Для второго инбаунда) [По умолчанию: 47067]: " XRAY_PORTE
-XRAY_PORTE=${XRAY_PORTE:-47067}
-
-read -p "На каком порту работает SSH? [По умолчанию: 22]: " SSH_PORT
+echo -n "На каком порту работает SSH? [По умолчанию: 22]: "
+read SSH_PORT < /dev/tty
 SSH_PORT=${SSH_PORT:-22}
 
 echo ""
@@ -91,13 +92,11 @@ EOF
 
 echo "Оптимизация сети применена."
 
-echo "[2/9] Обновление системных пакетов (может занять пару минут)..."
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -y > /dev/null 2>&1
-apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade -y > /dev/null 2>&1
+echo "[2/9] Обновление системных пакетов..."
+apt-get update -y && apt-get upgrade -y
 
 echo "[3/9] Установка системных компонентов..."
-apt-get install -y irqbalance ethtool curl cron nftables > /dev/null 2>&1
+apt-get install -y irqbalance ethtool curl cron nftables
 
 systemctl enable irqbalance > /dev/null 2>&1
 systemctl start irqbalance > /dev/null 2>&1
@@ -112,14 +111,14 @@ fi
 
 if ! command -v docker &> /dev/null; then
   echo "[4/9] Docker не найден. Установка официального Docker..."
-  curl -fsSL https://docker.com | sh > /dev/null 2>&1
+  curl -fsSL https://docker.com | sh
 else
   echo "[4/9] Docker уже установлен."
 fi
 
 echo "[5/9] Проверка и установка Certbot..."
 if ! command -v certbot &> /dev/null; then
-  apt-get install certbot -y > /dev/null 2>&1
+  apt-get install certbot -y
 fi
 
 echo "[6/9] Запрос SSL-сертификата от Let's Encrypt для $DOMAIN..."
@@ -128,15 +127,13 @@ certbot certonly --standalone \
   -d "$DOMAIN" \
   --email "$EMAIL" \
   --agree-tos \
-  --non-interactive > /dev/null 2>&1
+  --non-interactive
 
 if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
   echo ""
   echo "ОШИБКА: Не удалось выпустить SSL-сертификат."
-  echo "Проверьте, направлен ли домен на этот IP и не заблокирован ли порт 80."
   exit 1
 fi
-echo "Сертификат успешно получен."
 
 echo "[7/9] Настройка firewall Net-Shield..."
 
@@ -155,8 +152,6 @@ table inet filter {
         udp dport $NODE_PORT accept
         tcp dport $XRAY_PORT accept
         udp dport $XRAY_PORT accept
-        tcp dport $XRAY_PORTE accept
-        udp dport $XRAY_PORTE accept
         ip protocol icmp accept
         ip6 nexthdr ipv6-icmp accept
         tcp flags & (fin|syn) == (fin|syn) drop
@@ -177,7 +172,8 @@ table inet filter {
 EOF
 
 systemctl enable nftables >/dev/null 2>&1
-systemctl restart nftables >/dev/null 2>&1
+systemctl restart nftables
+
 echo "Firewall настроен."
 
 echo "[8/9] Настройка Cron для автоматического продления..."
@@ -207,7 +203,7 @@ services:
 EOF
 
 echo "Запуск контейнера remnanode..."
-docker compose up -d > /dev/null 2>&1
+docker compose up -d
 
 echo ""
 echo "==================================================================="
