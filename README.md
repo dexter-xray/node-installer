@@ -36,10 +36,16 @@
 curl -fsSL https://raw.githubusercontent.com/dexter-xray/node-installer/main/installer.sh | sudo bash
 ```
 
-Версия: TLS + BBR + Auto-renew + Ultimate Kernel + Net Shield
+Версия: TLS + BBR-X + Net-Shield + Auto-renew
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dexter-xray/node-installer/main/ultimate.sh | sudo bash
+```
+
+Версия: Ultimate + dev Xray-core
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dexter-xray/node-installer/main/ult_dev.sh | sudo bash
 ```
 
 ---
