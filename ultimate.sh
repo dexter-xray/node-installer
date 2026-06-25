@@ -13,43 +13,37 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 while [ -z "$DOMAIN" ]; do
-  echo -n "Введите ваш домен (например, example.com): "
-  read DOMAIN < /dev/tty
+  read -p "Введите ваш домен (например, example.com): " DOMAIN </dev/tty
   if [ -z "$DOMAIN" ]; then
     echo "Домен не может быть пустым."
   fi
 done
 
 while [ -z "$EMAIL" ]; do
-  echo -n "Введите ваш Email (для уведомлений Certbot): "
-  read EMAIL < /dev/tty
+  read -p "Введите ваш Email (для уведомлений Certbot): " EMAIL </dev/tty
   if [ -z "$EMAIL" ]; then
     echo "Email не может быть пустым."
   fi
 done
 
 while [ -z "$SECRET_KEY" ]; do
-  echo -n "Введите Secret Key из панели Remnawave: "
-  read SECRET_KEY < /dev/tty
+  read -p "Введите Secret Key из панели Remnawave: " SECRET_KEY </dev/tty
   if [ -z "$SECRET_KEY" ]; then
     echo "Ключ не может быть пустым. Попробуйте еще раз."
   fi
 done
 
-echo -n "На каком порту разместить ноду? [По умолчанию: 2222]: "
-read NODE_PORT < /dev/tty
+read -p "На каком порту разместить ноду? [По умолчанию: 2222]: " NODE_PORT </dev/tty
 NODE_PORT=${NODE_PORT:-2222}
 
-echo -n "На каком порту будет принимать подключения нода? [По умолчанию: 443]: "
-read XRAY_PORT < /dev/tty
+read -p "На каком порту будет принимать подключения нода? [По умолчанию: 443]: " XRAY_PORT </dev/tty
 XRAY_PORT=${XRAY_PORT:-443}
 
-echo -n "На каком порту работает SSH? [По умолчанию: 22]: "
-read SSH_PORT < /dev/tty
+read -p "На каком порту работает SSH? [По умолчанию: 22]: " SSH_PORT </dev/tty
 SSH_PORT=${SSH_PORT:-22}
 
+clear
 echo ""
-echo "--------------------------------------------------"
 echo "Начало настройки системы..."
 echo "--------------------------------------------------"
 
@@ -58,22 +52,30 @@ echo "[1/9] Оптимизация сети (BBR)..."
 cat > /etc/sysctl.d/99-remnanode.conf <<EOF
 net.core.default_qdisc=fq
 net.ipv4.tcp_congestion_control=bbr
+
 net.core.somaxconn=65535
 net.core.netdev_max_backlog=250000
+
 net.ipv4.tcp_fastopen=3
 net.ipv4.tcp_slow_start_after_idle=0
 net.ipv4.tcp_tw_reuse=1
 net.ipv4.tcp_fin_timeout=15
+
 net.ipv4.tcp_keepalive_time=1200
 net.ipv4.tcp_keepalive_intvl=30
 net.ipv4.tcp_keepalive_probes=5
+
 net.ipv4.tcp_max_syn_backlog=65535
 net.ipv4.tcp_syncookies=1
+
 net.ipv4.tcp_mtu_probing=1
 net.ipv4.tcp_rfc1337=1
+
 net.ipv4.ip_local_port_range=10000 65535
+
 net.ipv4.ip_forward=1
 net.ipv6.conf.all.forwarding=1
+
 fs.file-max=2097152
 fs.nr_open=2097152
 EOF
@@ -92,11 +94,15 @@ EOF
 
 echo "Оптимизация сети применена."
 
+# ЖЕСТКИЙ ЗАПРЕТ НА ДИАЛОГОВЫЕ ОКНА (Спасает вывод терминала от зависания)
+export DEBIAN_FRONTEND=noninteractive
+export UCFR_FORCE_CONFFOLD=1
+
 echo "[2/9] Обновление системных пакетов..."
-apt-get update -y && apt-get upgrade -y
+apt-get update -y && apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade -y
 
 echo "[3/9] Установка системных компонентов..."
-apt-get install -y irqbalance ethtool curl cron nftables
+apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install -y irqbalance ethtool curl cron nftables
 
 systemctl enable irqbalance > /dev/null 2>&1
 systemctl start irqbalance > /dev/null 2>&1
@@ -111,17 +117,20 @@ fi
 
 if ! command -v docker &> /dev/null; then
   echo "[4/9] Docker не найден. Установка официального Docker..."
-  curl -fsSL https://docker.com | sh
+  curl -fsSL https://get.docker.com | sh
 else
   echo "[4/9] Docker уже установлен."
 fi
 
 echo "[5/9] Проверка и установка Certbot..."
 if ! command -v certbot &> /dev/null; then
-  apt-get install certbot -y
+  apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install certbot -y
 fi
 
 echo "[6/9] Запрос SSL-сертификата от Let's Encrypt для $DOMAIN..."
+echo "Убедитесь, что порт 80 открыт и домен направлен на IP этого сервера!"
+echo ""
+
 certbot certonly --standalone \
   --preferred-challenges http \
   -d "$DOMAIN" \
@@ -132,6 +141,7 @@ certbot certonly --standalone \
 if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
   echo ""
   echo "ОШИБКА: Не удалось выпустить SSL-сертификат."
+  echo "Проверьте, направлен ли домен на этот IP и не заблокирован ли порт 80."
   exit 1
 fi
 
@@ -139,31 +149,44 @@ echo "[7/9] Настройка firewall Net-Shield..."
 
 cat > /etc/nftables.conf <<EOF
 #!/usr/sbin/nft -f
+
 flush ruleset
+
 table inet filter {
+
     chain input {
         type filter hook input priority 0;
         policy drop;
+
         iif lo accept
         ct state established,related accept
+
         tcp dport $SSH_PORT accept
+
         tcp dport 80 accept
+
         tcp dport $NODE_PORT accept
         udp dport $NODE_PORT accept
+
         tcp dport $XRAY_PORT accept
         udp dport $XRAY_PORT accept
+
         ip protocol icmp accept
         ip6 nexthdr ipv6-icmp accept
+
         tcp flags & (fin|syn) == (fin|syn) drop
         tcp flags & (syn|rst) == (syn|rst) drop
         tcp flags & (fin|rst) == (fin|rst) drop
         tcp flags == 0x0 drop
+
         counter drop
     }
+
     chain forward {
         type filter hook forward priority 0;
         policy drop;
     }
+
     chain output {
         type filter hook output priority 0;
         policy accept;
@@ -178,6 +201,7 @@ echo "Firewall настроен."
 
 echo "[8/9] Настройка Cron для автоматического продления..."
 (crontab -l 2>/dev/null; echo "0 3 * * * certbot renew --post-hook 'docker restart remnanode' >> /var/log/certbot-renew.log 2>&1") | crontab -
+
 systemctl enable cron > /dev/null 2>&1
 systemctl start cron > /dev/null 2>&1
 
@@ -209,7 +233,7 @@ echo ""
 echo "==================================================================="
 echo "Установка успешно завершена!"
 echo "Нода слушает порт: $NODE_PORT"
-echo "Нода принимает подключения: $XRAY_PORT , $XRAY_PORTE"
+echo "Нода принимает подключения: $XRAY_PORT"
 echo "Разрешённый порт SSH: $SSH_PORT"
 echo "BBR Extended: АКТИВИРОВАН"
 echo "Net-Shield: АКТИВИРОВАН"
