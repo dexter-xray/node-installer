@@ -39,6 +39,9 @@ NODE_PORT=${NODE_PORT:-2222}
 read -p "На каком порту будет принимать подключения нода? [По умолчанию: 443]: " XRAY_PORT </dev/tty
 XRAY_PORT=${XRAY_PORT:-443}
 
+read -p "На каком порту будет принимать подключения нода? ( Для второго инбаунда ) [По умолчанию: 47067]: " XRAY_PORTE </dev/tty
+XRAY_PORTE=${XRAY_PORTE:-47067}
+
 read -p "На каком порту работает SSH? [По умолчанию: 22]: " SSH_PORT </dev/tty
 SSH_PORT=${SSH_PORT:-22}
 
@@ -171,6 +174,9 @@ table inet filter {
         tcp dport $XRAY_PORT accept
         udp dport $XRAY_PORT accept
 
+        tcp dport $XRAY_PORTE accept
+        udp dport $XRAY_PORTE accept
+
         ip protocol icmp accept
         ip6 nexthdr ipv6-icmp accept
 
@@ -233,7 +239,7 @@ echo ""
 echo "==================================================================="
 echo "Установка успешно завершена!"
 echo "Нода слушает порт: $NODE_PORT"
-echo "Нода принимает подключения: $XRAY_PORT"
+echo "Нода принимает подключения: $XRAY_PORT , $XRAY_PORTE"
 echo "Разрешённый порт SSH: $SSH_PORT"
 echo "BBR Extended: АКТИВИРОВАН"
 echo "Net-Shield: АКТИВИРОВАН"
