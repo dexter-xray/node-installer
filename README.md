@@ -1,5 +1,7 @@
 # 🚀 Ультимативный автоматический установщик Remnawave Node (Remnanode)
 
+⚠️ Протестированы только на Linux 24.04 lts . Работа на других дистрибутивах не гарантируется.
+
 <p align="center">
   <a href="https://t.me/IamLeonKennedy"><alt="Telegram Creator"></a>
 </p>
