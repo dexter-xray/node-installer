@@ -77,7 +77,9 @@ net.ipv4.tcp_rfc1337=1
 net.ipv4.ip_local_port_range=10000 65535
 
 net.ipv4.ip_forward=1
-net.ipv6.conf.all.forwarding=1
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
 
 fs.file-max=2097152
 fs.nr_open=2097152
