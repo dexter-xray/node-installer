@@ -32,25 +32,25 @@
 
 Просто скопируйте и запустите команду в терминале вашего сервера от имени `root` :
 
-Версия: TLS + BBR + Auto-renew
+Версия: TLS + BBR + CrowdSec + Fail2Ban + Auto-renew ( Рекомендуется )
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dexter-xray/node-installer/main/installer.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/dexter-xray/node-installer/main/ult_crowdsec.sh | sudo bash
 ```
 
-Версия: TLS + BBR-X + Net-Shield + Auto-renew
+Версия: TLS + BBR + Auto-renew
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dexter-xray/node-installer/main/ultimate.sh | sudo bash
 ```
 
-Версия: Ultimate + dev Xray-core
+Версия: TLS + BBR + Auto-renew ( DEV Xray-core )
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dexter-xray/node-installer/main/ult_dev.sh | sudo bash
 ```
 
-Версия: Оптимизация сети
+Отдельная Оптимизация сети, уже присутствует в остальных скриптах
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dexter-xray/node-installer/main/optimize-network.sh | sudo bash
