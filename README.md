@@ -50,6 +50,12 @@ curl -fsSL https://raw.githubusercontent.com/dexter-xray/node-installer/main/ult
 curl -fsSL https://raw.githubusercontent.com/dexter-xray/node-installer/main/ult_dev.sh | sudo bash
 ```
 
+Версия: Оптимизация сети
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dexter-xray/node-installer/main/optimize-network.sh | sudo bash
+```
+
 ---
 
 ## 📝 Какие данные запрашивает скрипт?
