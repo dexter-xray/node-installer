@@ -3,14 +3,30 @@
 clear
 echo "=================================================="
 echo " Скрипт сделан: Dexter | @IamLeonKennedy"
-echo " (Версия: TLS + BBR + CrowdSec + Fail2Ban + Auto-renew) "
+echo " (Версия: TLS + BBR + CrowdSec + Auto-renew) "
 echo "=================================================="
 echo ""
 
 if [ "$EUID" -ne 0 ]; then
-  echo "Ошибка: Пожалуйста, запустите скрипт с правами root (через sudo)."
+  echo "Ошибка: запустите скрипт от root через sudo или после команды: su -"
   exit 1
 fi
+
+if [ ! -r /etc/os-release ]; then
+  echo "Ошибка: не удалось определить операционную систему."
+  exit 1
+fi
+
+. /etc/os-release
+
+if ! { [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ]; } && \
+   ! { [ "${ID:-}" = "debian" ] && [ "${VERSION_ID:-}" = "12" ]; }; then
+  echo "Ошибка: поддерживаются только Ubuntu 24.04 LTS и Debian 12."
+  echo "Обнаружено: ${PRETTY_NAME:-неизвестная система}"
+  exit 1
+fi
+
+echo "Обнаружена поддерживаемая система: ${PRETTY_NAME}"
 
 while [ -z "$DOMAIN" ]; do
   read -p "Введите ваш домен (например, example.com): " DOMAIN </dev/tty
@@ -33,8 +49,16 @@ while [ -z "$SECRET_KEY" ]; do
   fi
 done
 
-read -p "На каком порту разместить ноду? [По умолчанию: 2222]: " NODE_PORT </dev/tty
-NODE_PORT=${NODE_PORT:-2222}
+while true; do
+  read -r -p "На каком порту разместить ноду? [По умолчанию: 2222]: " NODE_PORT </dev/tty
+  NODE_PORT=${NODE_PORT:-2222}
+
+  if [[ "$NODE_PORT" =~ ^[0-9]+$ ]] && [ "$NODE_PORT" -ge 1 ] && [ "$NODE_PORT" -le 65535 ]; then
+    break
+  fi
+
+  echo "Ошибка: укажите порт от 1 до 65535."
+done
 
 CURRENT_SSH_PORT=$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')
 CURRENT_SSH_PORT=${CURRENT_SSH_PORT:-22}
@@ -102,7 +126,7 @@ EOF
 modprobe tcp_bbr
 
 cat > "$SYSCTL_FILE" <<'EOF'
-# Ubuntu 24.04 LTS VPN network optimization
+# Ubuntu 24.04 LTS / Debian 12 VPN network optimization
 
 # Маршрутизация VPN-трафика
 net.ipv4.ip_forward = 1
@@ -205,7 +229,7 @@ export DEBIAN_FRONTEND=noninteractive
 export UCFR_FORCE_CONFFOLD=1
 
 echo "[2/10] Обновление системных пакетов..."
-apt-get update -y && apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade -y
+apt-get update -y
 
 echo "[3/10] Установка системных компонентов..."
 apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install -y irqbalance ethtool curl cron
@@ -233,17 +257,37 @@ echo "[5/10] Настройка SSH..."
 if [ "$CHANGE_SSH_PORT" = "yes" ]; then
   SSH_DROPIN_DIR="/etc/ssh/sshd_config.d"
   SSH_DROPIN_FILE="$SSH_DROPIN_DIR/00-remnanode-port.conf"
+  SSH_DROPIN_BACKUP=""
 
   mkdir -p "$SSH_DROPIN_DIR"
   cp -a /etc/ssh/sshd_config "/etc/ssh/sshd_config.backup.$(date +%Y%m%d-%H%M%S)"
 
+  if [ -f "$SSH_DROPIN_FILE" ]; then
+    SSH_DROPIN_BACKUP=$(mktemp)
+    cp -a "$SSH_DROPIN_FILE" "$SSH_DROPIN_BACKUP"
+  fi
+
   cat > "$SSH_DROPIN_FILE" <<EOF
-# Managed by ultimate.sh
+# Managed by ult_crowdsec.sh
 Port $SSH_PORT
 EOF
 
+  rollback_ssh_port() {
+    if [ -n "$SSH_DROPIN_BACKUP" ] && [ -f "$SSH_DROPIN_BACKUP" ]; then
+      cp -a "$SSH_DROPIN_BACKUP" "$SSH_DROPIN_FILE"
+    else
+      rm -f "$SSH_DROPIN_FILE"
+    fi
+
+    systemctl daemon-reload
+    if systemctl is-active --quiet ssh.socket; then
+      systemctl restart ssh.socket || true
+    fi
+    systemctl reload ssh >/dev/null 2>&1 || systemctl restart ssh >/dev/null 2>&1 || true
+  }
+
   if ! sshd -t; then
-    rm -f "$SSH_DROPIN_FILE"
+    rollback_ssh_port
     echo "Ошибка конфигурации SSH. Изменение порта отменено."
     exit 1
   fi
@@ -252,16 +296,37 @@ EOF
     ufw allow "$SSH_PORT/tcp"
   fi
 
-  systemctl reload ssh
+  systemctl daemon-reload
+  if systemctl is-active --quiet ssh.socket; then
+    systemctl restart ssh.socket
+  fi
+  systemctl reload ssh >/dev/null 2>&1 || systemctl restart ssh
+
+  sleep 1
+  if ! ss -H -ltn | awk -v port=":$SSH_PORT" '$4 ~ (port "$") {found=1} END {exit !found}'; then
+    rollback_ssh_port
+    echo "Ошибка: SSH не начал слушать порт $SSH_PORT. Изменение автоматически отменено."
+    exit 1
+  fi
+
+  rm -f "$SSH_DROPIN_BACKUP"
   echo "SSH перенесён на TCP-порт $SSH_PORT. Текущую SSH-сессию не закрывайте до проверки нового подключения."
 else
   echo "SSH оставлен на текущем порту $SSH_PORT."
 fi
 
-echo "[6/10] Установка CrowdSec и Fail2Ban..."
+echo "[6/10] Установка и настройка CrowdSec..."
+
+# Удаляем Fail2Ban, если он остался от предыдущего запуска.
+# CrowdSec и Fail2Ban не должны одновременно управлять блокировками.
+if dpkg-query -W -f='${Status}' fail2ban 2>/dev/null | grep -q "install ok installed"; then
+  systemctl disable --now fail2ban >/dev/null 2>&1 || true
+  apt-get purge -y fail2ban
+fi
+rm -rf /etc/fail2ban
 
 apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install -y \
-  ca-certificates gnupg fail2ban
+  ca-certificates gnupg
 
 if ! command -v crowdsec >/dev/null 2>&1; then
   curl -fsSL https://install.crowdsec.net | sh
@@ -271,35 +336,28 @@ fi
 apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install -y \
   crowdsec crowdsec-firewall-bouncer-nftables
 
-mkdir -p /etc/fail2ban/jail.d
-cat > /etc/fail2ban/jail.d/sshd.local <<EOF
-[sshd]
-enabled = true
-port = $SSH_PORT
-backend = systemd
-maxretry = 5
-findtime = 10m
-bantime = 1h
-EOF
-
 if command -v cscli >/dev/null 2>&1; then
   cscli collections install crowdsecurity/sshd >/dev/null 2>&1 || true
 fi
 
 systemctl enable --now crowdsec
 systemctl enable --now crowdsec-firewall-bouncer
-systemctl enable --now fail2ban
 systemctl restart crowdsec
 systemctl restart crowdsec-firewall-bouncer
-systemctl restart fail2ban
 
-if ! fail2ban-client status sshd >/dev/null 2>&1; then
-  echo "Ошибка: jail Fail2Ban для SSH не запустился."
-  systemctl status fail2ban --no-pager || true
+if ! systemctl is-active --quiet crowdsec; then
+  echo "Ошибка: служба CrowdSec не запустилась."
+  systemctl status crowdsec --no-pager -l || true
   exit 1
 fi
 
-echo "CrowdSec, firewall bouncer и Fail2Ban установлены и запущены."
+if ! systemctl is-active --quiet crowdsec-firewall-bouncer; then
+  echo "Ошибка: CrowdSec Firewall Bouncer не запустился."
+  systemctl status crowdsec-firewall-bouncer --no-pager -l || true
+  exit 1
+fi
+
+echo "CrowdSec и firewall bouncer установлены и запущены."
 
 echo "[7/10] Проверка и установка Certbot..."
 if ! command -v certbot &> /dev/null; then
@@ -326,7 +384,11 @@ fi
 
 
 echo "[9/10] Настройка Cron для автоматического продления..."
-(crontab -l 2>/dev/null; echo "0 3 * * * certbot renew --post-hook 'docker restart remnanode' >> /var/log/certbot-renew.log 2>&1") | crontab -
+CRON_JOB="0 3 * * * certbot renew --post-hook 'docker restart remnanode' >> /var/log/certbot-renew.log 2>&1"
+CURRENT_CRONTAB=$(crontab -l 2>/dev/null || true)
+if ! printf '%s\n' "$CURRENT_CRONTAB" | grep -Fq "$CRON_JOB"; then
+  { printf '%s\n' "$CURRENT_CRONTAB"; printf '%s\n' "$CRON_JOB"; } | sed '/^$/d' | crontab -
+fi
 
 systemctl enable cron > /dev/null 2>&1
 systemctl start cron > /dev/null 2>&1
@@ -369,7 +431,6 @@ echo "NET-ADMIN : Active"
 echo "Remnanode Version : Latest"
 echo "BBR + оптимизация сети: АКТИВИРОВАНЫ"
 echo "CrowdSec + firewall bouncer: АКТИВИРОВАНЫ"
-echo "Fail2Ban SSH jail: АКТИВИРОВАН"
 echo "SSH-порт: $SSH_PORT"
 echo "==================================================================="
 echo "TLS: НАСТРОЕН"
