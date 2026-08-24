@@ -232,7 +232,7 @@ echo "[2/10] Обновление системных пакетов..."
 apt-get update -y
 
 echo "[3/10] Установка системных компонентов..."
-apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install -y irqbalance ethtool curl cron
+apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install -y irqbalance ethtool curl cron nftables
 
 systemctl enable irqbalance > /dev/null 2>&1
 systemctl start irqbalance > /dev/null 2>&1
@@ -341,8 +341,43 @@ if command -v cscli >/dev/null 2>&1; then
 fi
 
 systemctl enable --now crowdsec
-systemctl enable --now crowdsec-firewall-bouncer
 systemctl restart crowdsec
+
+# Регистрируем bouncer заново и записываем действующий ключ Local API.
+# Это предотвращает ошибку: API error: access forbidden.
+BOUNCER_NAME="crowdsec-firewall-bouncer"
+BOUNCER_CONFIG="/etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml"
+
+systemctl stop crowdsec-firewall-bouncer >/dev/null 2>&1 || true
+cscli bouncers delete "$BOUNCER_NAME" >/dev/null 2>&1 || true
+BOUNCER_API_KEY=$(cscli bouncers add "$BOUNCER_NAME" -o raw)
+
+if [ -z "$BOUNCER_API_KEY" ] || [ ! -f "$BOUNCER_CONFIG" ]; then
+  echo "Ошибка: не удалось зарегистрировать CrowdSec Firewall Bouncer."
+  exit 1
+fi
+
+python3 - "$BOUNCER_CONFIG" "$BOUNCER_API_KEY" <<'PYCODE'
+from pathlib import Path
+import re
+import sys
+
+config_path = Path(sys.argv[1])
+api_key = sys.argv[2]
+content = config_path.read_text()
+updated, count = re.subn(
+    r"(?m)^api_key\s*:\s*.*$",
+    f"api_key: {api_key}",
+    content,
+    count=1,
+)
+if count != 1:
+    raise SystemExit("В конфигурации bouncer не найден параметр api_key")
+config_path.write_text(updated)
+PYCODE
+
+chmod 600 "$BOUNCER_CONFIG"
+systemctl enable crowdsec-firewall-bouncer
 systemctl restart crowdsec-firewall-bouncer
 
 if ! systemctl is-active --quiet crowdsec; then
