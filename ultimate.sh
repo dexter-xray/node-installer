@@ -239,8 +239,6 @@ services:
       - NODE_PORT=$NODE_PORT
       - SECRET_KEY="$SECRET_KEY"
     volumes:
-      - /etc/letsencrypt/live/$DOMAIN/fullchain.pem:/var/lib/remnawave/configs/xray/ssl/server.crt:ro
-      - /etc/letsencrypt/live/$DOMAIN/privkey.pem:/var/lib/remnawave/configs/xray/ssl/server.key:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
 EOF
 
