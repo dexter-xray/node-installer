@@ -20,8 +20,8 @@ fi
 . /etc/os-release
 
 if ! { [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ]; } && \
-   ! { [ "${ID:-}" = "debian" ] && [ "${VERSION_ID:-}" = "12" ]; }; then
-  echo "Ошибка: поддерживаются только Ubuntu 24.04 LTS и Debian 12."
+   ! { [ "${ID:-}" = "debian" ] && { [ "${VERSION_ID:-}" = "12" ] || [ "${VERSION_ID:-}" = "13" ]; }; }; then
+  echo "Ошибка: поддерживаются только Ubuntu 24.04 LTS, Debian 12 и Debian 13."
   echo "Обнаружено: ${PRETTY_NAME:-неизвестная система}"
   exit 1
 fi
@@ -450,8 +450,6 @@ services:
       - NODE_PORT=$NODE_PORT
       - SECRET_KEY="$SECRET_KEY"
     volumes:
-      - /etc/letsencrypt/live/$DOMAIN/fullchain.pem:/var/lib/remnawave/configs/xray/ssl/server.crt:ro
-      - /etc/letsencrypt/live/$DOMAIN/privkey.pem:/var/lib/remnawave/configs/xray/ssl/server.key:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
 EOF
 
