@@ -32,7 +32,7 @@
 
 Просто скопируйте и запустите команду в терминале вашего сервера от имени `root` :
 
-Версия: TLS + BBR + CrowdSec + Fail2Ban + Auto-renew ( Рекомендуется )
+Версия: TLS + BBR + CrowdSec + Auto-renew ( Рекомендуется )
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dexter-xray/node-installer/main/ult_crowdsec.sh | sudo bash
