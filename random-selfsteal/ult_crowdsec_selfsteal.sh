@@ -138,8 +138,20 @@ ask_yes_no() {
   fi
 
   while true; do
-    read -r -p "$prompt $hint: " answer </dev/tty
-    case "${answer,,}" in
+    answer=""
+    if ! IFS= read -r -p "$prompt $hint: " answer </dev/tty; then
+      echo
+      return 1
+    fi
+
+    # Удаляем CR и пробелы по краям: некоторые SSH-терминалы
+    # передают одиночный ответ как "n\r" или "n ".
+    answer=${answer//$'\r'/}
+    answer="${answer#"${answer%%[![:space:]]*}"}"
+    answer="${answer%"${answer##*[![:space:]]}"}"
+    answer=${answer,,}
+
+    case "$answer" in
       y|yes|д|да)
         return 0
         ;;
@@ -151,7 +163,7 @@ ask_yes_no() {
         return
         ;;
       *)
-        echo "Введите y/yes/да или n/no/нет."
+        printf 'Неизвестный ответ: %q. Введите y/yes/да или n/no/нет.\n' "$answer"
         ;;
     esac
   done
