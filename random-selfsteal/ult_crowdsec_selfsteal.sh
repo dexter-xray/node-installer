@@ -38,6 +38,46 @@ die() {
 apt_is_busy() {
   local lock
 
+  # Проверяем именно POSIX-блокировку, а не наличие процесса apt/dpkg.
+  # Завершившийся процесс может оставаться zombie и давать ложный результат pgrep.
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - \
+      /var/lib/dpkg/lock-frontend \
+      /var/lib/dpkg/lock \
+      /var/cache/apt/archives/lock \
+      /var/lib/apt/lists/lock <<'PY'
+import fcntl
+import os
+import sys
+
+busy = False
+opened = []
+
+try:
+    for path in sys.argv[1:]:
+        if not os.path.exists(path):
+            continue
+        fd = os.open(path, os.O_RDWR)
+        opened.append(fd)
+        try:
+            fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            busy = True
+            break
+finally:
+    for fd in opened:
+        try:
+            fcntl.lockf(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(fd)
+
+raise SystemExit(0 if busy else 1)
+PY
+    return $?
+  fi
+
+  # Резервная проверка до установки python3.
   if command -v fuser >/dev/null 2>&1; then
     for lock in \
       /var/lib/dpkg/lock-frontend \
@@ -48,10 +88,7 @@ apt_is_busy() {
     done
   fi
 
-  pgrep -x apt >/dev/null 2>&1 ||
-    pgrep -x apt-get >/dev/null 2>&1 ||
-    pgrep -x dpkg >/dev/null 2>&1 ||
-    pgrep -f '/usr/bin/unattended-upgrade' >/dev/null 2>&1
+  return 1
 }
 
 wait_for_apt_unlock() {
