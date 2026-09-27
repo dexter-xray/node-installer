@@ -208,6 +208,7 @@ check_listen_port() {
 configure_haproxy() {
     local listen_port=$1
     local backend_address temp_cfg backup='' i
+    local -a service_action=()
     temp_cfg=$(mktemp)
 
     cat > "$temp_cfg" <<EOF
@@ -249,7 +250,7 @@ EOF
     haproxy -c -f "$temp_cfg"
 
     if [[ -f $HAPROXY_CFG ]]; then
-        backup="${HAPROXY_CFG}.backup-$(date +%Y%m%d-%H%M%S)"
+        backup="${HAPROXY_CFG}.backup-$(date +%Y%m%d-%H%M%S)-${RANDOM}"
         cp -a "$HAPROXY_CFG" "$backup"
         info "Резервная копия: ${backup}"
     fi
@@ -257,17 +258,210 @@ EOF
     install -o root -g root -m 0644 "$temp_cfg" "$HAPROXY_CFG"
     rm -f "$temp_cfg"
 
-    if ! systemctl enable --now haproxy || ! systemctl restart haproxy; then
+    if systemctl is-active --quiet haproxy; then
+        service_action=(systemctl reload haproxy)
+    else
+        service_action=(systemctl enable --now haproxy)
+    fi
+
+    if ! "${service_action[@]}"; then
         if [[ -n $backup && -f $backup ]]; then
             warn "Восстанавливаю предыдущую конфигурацию HAProxy."
             cp -a "$backup" "$HAPROXY_CFG"
-            systemctl restart haproxy || true
+            systemctl reload haproxy 2>/dev/null || systemctl restart haproxy || true
         fi
         die "HAProxy не запустился. Проверьте: journalctl -u haproxy -n 100"
     fi
 
     systemctl is-active --quiet haproxy || die "Служба HAProxy не активна."
     ok "HAProxy настроен: 0.0.0.0:${listen_port} -> ${#BACKEND_IPS[@]} выходных нод."
+}
+
+load_haproxy_config() {
+    local bind_address endpoint
+    local -a endpoints=()
+
+    [[ -f $HAPROXY_CFG ]] || die "Конфигурация ${HAPROXY_CFG} не найдена."
+
+    bind_address=$(
+        awk '
+            $1 == "frontend" && $2 == "vless_reality_frontend" {inside=1; next}
+            inside && $1 == "bind" {print $2; exit}
+            inside && ($1 == "frontend" || $1 == "backend" || $1 == "listen") {exit}
+        ' "$HAPROXY_CFG"
+    )
+    [[ -n $bind_address ]] ||
+        die "Не найден frontend vless_reality_frontend в ${HAPROXY_CFG}."
+
+    REPLY_LISTEN_PORT=${bind_address##*:}
+    valid_port "$REPLY_LISTEN_PORT" ||
+        die "Не удалось определить входной порт из строки bind: ${bind_address}"
+
+    mapfile -t endpoints < <(
+        awk '
+            $1 == "backend" && $2 == "vless_reality_backend" {inside=1; next}
+            inside && $1 == "server" {print $3}
+            inside && ($1 == "frontend" || $1 == "backend" || $1 == "listen") {exit}
+        ' "$HAPROXY_CFG"
+    )
+
+    (( ${#endpoints[@]} > 0 )) ||
+        die "В backend vless_reality_backend не найдено выходных нод."
+
+    BACKEND_IPS=()
+    BACKEND_PORTS=()
+    for endpoint in "${endpoints[@]}"; do
+        parse_backend_endpoint "$endpoint" ||
+            die "Не удалось разобрать адрес выходной ноды: ${endpoint}"
+        BACKEND_IPS+=("$REPLY_IP")
+        BACKEND_PORTS+=("$REPLY_PORT")
+    done
+}
+
+show_haproxy_config() {
+    local listen_port=$1 i address
+    printf '\n%bТекущая конфигурация HAProxy%b\n' "$C_CYAN" "$C_RESET"
+    printf '  Входной порт: %s\n' "$listen_port"
+    printf '  Выходные ноды:\n'
+    for i in "${!BACKEND_IPS[@]}"; do
+        address=$(format_haproxy_address "${BACKEND_IPS[$i]}" "${BACKEND_PORTS[$i]}")
+        printf '    %d) %s\n' "$((i + 1))" "$address"
+    done
+    printf '\n'
+}
+
+ask_backend_number() {
+    local prompt=$1 value max=${#BACKEND_IPS[@]}
+    while true; do
+        read -r -p "$prompt [1-${max}]: " value
+        if [[ $value =~ ^[0-9]+$ ]] && (( 10#$value >= 1 && 10#$value <= max )); then
+            REPLY_INDEX=$((10#$value - 1))
+            return 0
+        fi
+        warn "Введите номер от 1 до ${max}."
+    done
+}
+
+ask_single_backend() {
+    local endpoint
+    while true; do
+        read -r -p "Введите выходную ноду в формате IP:порт: " endpoint
+        endpoint=${endpoint//[[:space:]]/}
+        if parse_backend_endpoint "$endpoint"; then
+            return 0
+        fi
+        warn "Неверный формат. IPv4: 203.0.113.10:443; IPv6: [2001:db8::10]:443"
+    done
+}
+
+allow_backend_ufw() {
+    local ip=$1 port=$2
+    command -v ufw >/dev/null 2>&1 || return 0
+    ufw allow out to "$ip" port "$port" proto tcp \
+        comment 'HAProxy to foreign Xray' >/dev/null || true
+    ufw status | grep -q '^Status: active' && ufw reload >/dev/null || true
+}
+
+allow_frontend_ufw() {
+    local port=$1
+    command -v ufw >/dev/null 2>&1 || return 0
+    ufw allow "${port}/tcp" comment 'HAProxy VLESS REALITY' >/dev/null || true
+    ufw status | grep -q '^Status: active' && ufw reload >/dev/null || true
+}
+
+reload_haproxy() {
+    haproxy -c -f "$HAPROXY_CFG"
+    if systemctl reload haproxy; then
+        ok "HAProxy успешно перезагружен без разрыва активных соединений."
+    else
+        warn "Мягкая перезагрузка не удалась; выполняю restart."
+        systemctl restart haproxy
+        ok "HAProxy перезапущен."
+    fi
+}
+
+manage_haproxy() {
+    local listen_port choice i duplicate new_port
+
+    check_os
+    command -v haproxy >/dev/null 2>&1 ||
+        die "HAProxy не установлен. Сначала выберите пункт 1."
+    load_haproxy_config
+    listen_port=$REPLY_LISTEN_PORT
+
+    while true; do
+        show_haproxy_config "$listen_port"
+        cat <<'EOF'
+  1) Добавить выходную ноду
+  2) Удалить выходную ноду
+  3) Изменить входной порт HAProxy
+  4) Изменить порт выходной ноды
+  5) Перезагрузить HAProxy
+  0) Вернуться в главное меню
+EOF
+        read -r -p "Выберите действие [1/2/3/4/5/0]: " choice
+
+        case "$choice" in
+            1)
+                ask_single_backend
+                duplicate=0
+                for i in "${!BACKEND_IPS[@]}"; do
+                    if [[ ${BACKEND_IPS[$i]} == "$REPLY_IP" &&
+                          ${BACKEND_PORTS[$i]} == "$REPLY_PORT" ]]; then
+                        duplicate=1
+                        break
+                    fi
+                done
+                (( duplicate == 0 )) || { warn "Такая выходная нода уже существует."; continue; }
+                BACKEND_IPS+=("$REPLY_IP")
+                BACKEND_PORTS+=("$REPLY_PORT")
+                check_backend "$REPLY_IP" "$REPLY_PORT"
+                allow_backend_ufw "$REPLY_IP" "$REPLY_PORT"
+                configure_haproxy "$listen_port"
+                ;;
+            2)
+                if (( ${#BACKEND_IPS[@]} <= 1 )); then
+                    warn "Нельзя удалить единственную выходную ноду."
+                    continue
+                fi
+                ask_backend_number "Номер удаляемой ноды"
+                unset "BACKEND_IPS[$REPLY_INDEX]"
+                unset "BACKEND_PORTS[$REPLY_INDEX]"
+                BACKEND_IPS=("${BACKEND_IPS[@]}")
+                BACKEND_PORTS=("${BACKEND_PORTS[@]}")
+                configure_haproxy "$listen_port"
+                ;;
+            3)
+                new_port=$(ask_port "Новый входной TCP-порт HAProxy: ")
+                if [[ $new_port == "$listen_port" ]]; then
+                    warn "Этот порт уже используется HAProxy."
+                    continue
+                fi
+                check_listen_port "$new_port"
+                allow_frontend_ufw "$new_port"
+                configure_haproxy "$new_port"
+                warn "Старое правило UFW для порта ${listen_port} оставлено, чтобы не удалить чужое правило."
+                listen_port=$new_port
+                ;;
+            4)
+                ask_backend_number "Номер изменяемой ноды"
+                new_port=$(ask_port "Новый порт для ${BACKEND_IPS[$REPLY_INDEX]}: ")
+                BACKEND_PORTS[$REPLY_INDEX]=$new_port
+                check_backend "${BACKEND_IPS[$REPLY_INDEX]}" "$new_port"
+                allow_backend_ufw "${BACKEND_IPS[$REPLY_INDEX]}" "$new_port"
+                configure_haproxy "$listen_port"
+                ;;
+            5)
+                reload_haproxy
+                ;;
+            0)
+                return 0
+                ;;
+            *)
+                warn "Неизвестный пункт: ${choice}"
+                ;;
+        esac
+    done
 }
 
 get_ssh_ports() {
@@ -395,10 +589,11 @@ show_menu() {
     printf '%b' "$C_CYAN"
     cat <<'EOF'
 ============================================================
-          Мульти-скрипт | Made by @IamLeonKennedy
+        Multi-script | Made by @IamLeonKennedy
 ============================================================
   1) Установить HAProxy TCP relay
   2) Установить ноду
+  3) Управление HAProxy
   0) Отмена
 ============================================================
 EOF
@@ -408,15 +603,18 @@ EOF
 main() {
     local choice
     require_root
-    show_menu
-    read -r -p "Выберите вариант [1/2/0]: " choice
+    while true; do
+        show_menu
+        read -r -p "Выберите вариант [1/2/3/0]: " choice
 
-    case "$choice" in
-        1) run_haproxy_install ;;
-        2) run_node_installer ;;
-        0) info "Отменено." ;;
-        *) die "Неизвестный вариант: ${choice}" ;;
-    esac
+        case "$choice" in
+            1) run_haproxy_install ;;
+            2) run_node_installer ;;
+            3) manage_haproxy ;;
+            0) info "Отменено."; return 0 ;;
+            *) warn "Неизвестный вариант: ${choice}" ;;
+        esac
+    done
 }
 
 main "$@"
