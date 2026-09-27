@@ -90,7 +90,7 @@ PY
 ask_ip() {
     local value
     while true; do
-        read -r -p "IP-адрес выходной зарубежной ноды: " value
+        read -r -u 3 -p "IP-адрес выходной зарубежной ноды: " value
         if valid_ip "$value"; then
             printf '%s' "$value"
             return 0
@@ -102,7 +102,7 @@ ask_ip() {
 ask_port() {
     local prompt=$1 value
     while true; do
-        read -r -p "$prompt" value
+        read -r -u 3 -p "$prompt" value
         if valid_port "$value"; then
             printf '%s' "$value"
             return 0
@@ -114,7 +114,7 @@ ask_port() {
 ask_backend_count() {
     local value
     while true; do
-        read -r -p "Количество выходных нод: " value
+        read -r -u 3 -p "Количество выходных нод: " value
         if [[ $value =~ ^[0-9]+$ ]] && (( 10#$value >= 1 && 10#$value <= 50 )); then
             REPLY=$((10#$value))
             return 0
@@ -149,7 +149,7 @@ ask_multiple_backends() {
     local -a entries=()
 
     while true; do
-        read -r -p "Введите ${expected} нод через запятую (IP:порт,IP:порт): " input
+        read -r -u 3 -p "Введите ${expected} нод через запятую (IP:порт,IP:порт): " input
         IFS=',' read -r -a entries <<< "$input"
 
         if (( ${#entries[@]} != expected )); then
@@ -333,7 +333,7 @@ show_haproxy_config() {
 ask_backend_number() {
     local prompt=$1 value max=${#BACKEND_IPS[@]}
     while true; do
-        read -r -p "$prompt [1-${max}]: " value
+        read -r -u 3 -p "$prompt [1-${max}]: " value
         if [[ $value =~ ^[0-9]+$ ]] && (( 10#$value >= 1 && 10#$value <= max )); then
             REPLY_INDEX=$((10#$value - 1))
             return 0
@@ -345,7 +345,7 @@ ask_backend_number() {
 ask_single_backend() {
     local endpoint
     while true; do
-        read -r -p "Введите выходную ноду в формате IP:порт: " endpoint
+        read -r -u 3 -p "Введите выходную ноду в формате IP:порт: " endpoint
         endpoint=${endpoint//[[:space:]]/}
         if parse_backend_endpoint "$endpoint"; then
             return 0
@@ -399,7 +399,7 @@ manage_haproxy() {
   5) Перезагрузить HAProxy
   0) Вернуться в главное меню
 EOF
-        read -r -p "Выберите действие [1/2/3/4/5/0]: " choice
+        read -r -u 3 -p "Выберите действие [1/2/3/4/5/0]: " choice
 
         case "$choice" in
             1)
@@ -603,9 +603,19 @@ EOF
 main() {
     local choice
     require_root
+
+    # При запуске через `curl ... | sudo bash` стандартный ввод занят
+    # конвейером и обычный read сразу получает EOF. Все интерактивные
+    # запросы читаем непосредственно из управляющего терминала.
+    if [[ -r /dev/tty && -w /dev/tty ]]; then
+        exec 3<>/dev/tty
+    else
+        die "Нужен интерактивный терминал. Скачайте скрипт и запустите: sudo bash install-haproxy-vless-manager.sh"
+    fi
+
     while true; do
         show_menu
-        read -r -p "Выберите вариант [1/2/3/0]: " choice
+        read -r -u 3 -p "Выберите вариант [1/2/3/0]: " choice
 
         case "$choice" in
             1) run_haproxy_install ;;
